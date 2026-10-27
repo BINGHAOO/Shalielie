@@ -3,9 +3,9 @@ name: StylePort Apple Build
 on:
   push:
     branches: ["**"]
-    # A v… release tag attaches the unsigned IPA to that release, next to the command-line
-    # binaries; an ios-v… tag publishes it as an iOS-only pre-release. Path filters don't
-    # apply to tag pushes.
+    # A v… release tag attaches the ad-hoc signed IPA to that release, next to the
+    # command-line binaries; an ios-v… tag publishes it as an iOS-only pre-release. Path
+    # filters don't apply to tag pushes.
     tags: ["v*", "ios-v*"]
     paths:
       - "swiftPort/**"
@@ -43,7 +43,7 @@ jobs:
           -destination 'generic/platform=iOS'
           -derivedDataPath "$RUNNER_TEMP/StylePort-iOS"
           CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
-      - name: Package unsigned app bundles
+      - name: Package app bundles
         run: |
           set -euo pipefail
           artifact_root="$RUNNER_TEMP/StylePort-artifacts"
@@ -51,12 +51,18 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             "$RUNNER_TEMP/StylePort-iOS-Simulator/Build/Products/Debug-iphonesimulator/StylePort.app" \
             "$artifact_root/ios-simulator/Palettify-iOS-Simulator-unsigned.zip"
-          # An unsigned IPA for sideloading tools (Sideloadly, AltStore), which sign it with
-          # the installer's own Apple ID.
+          # An ad-hoc signed ("fakesigned") IPA for sideloading tools and LiveContainer.
+          # Ad-hoc signing needs no certificate or provisioning profile; installers
+          # (SideStore, AltStore, Sideloadly, LiveContainer) replace the signature with
+          # their own on install. A completely unsigned binary also installs in
+          # LiveContainer, but the ad-hoc signature matches what every other
+          # distributed IPA carries, so strict tools accept the file as-is.
           payload="$RUNNER_TEMP/ipa/Payload"
           mkdir -p "$payload"
           cp -R "$RUNNER_TEMP/StylePort-iOS/Build/Products/Release-iphoneos/StylePort.app" "$payload/"
-          (cd "$RUNNER_TEMP/ipa" && zip -qry "$artifact_root/ios-device/Palettify-unsigned.ipa" Payload)
+          codesign --force --sign - "$payload/StylePort.app/Frameworks/StylePortCore.framework/StylePortCore"
+          codesign --force --sign - "$payload/StylePort.app/StylePort"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry "$artifact_root/ios-device/Palettify.ipa" Payload)
           (cd "$artifact_root/ios-simulator" && shasum -a 256 *.zip > SHA256SUMS.txt)
           # Its own name: a release also carries the binaries' SHA256SUMS.txt.
           (cd "$artifact_root/ios-device" && shasum -a 256 *.ipa > Palettify-SHA256SUMS.txt)
@@ -73,10 +79,10 @@ jobs:
           path: ${{ runner.temp }}/StylePort-artifacts/ios-simulator
           if-no-files-found: error
           retention-days: 14
-      - name: Upload unsigned iOS and iPadOS device IPA
+      - name: Upload ad-hoc signed iOS and iPadOS device IPA
         uses: actions/upload-artifact@v7
         with:
-          name: Palettify-iOS-unsigned-ipa-${{ github.sha }}
+          name: Palettify-iOS-ipa-${{ github.sha }}
           path: ${{ runner.temp }}/StylePort-artifacts/ios-device
           if-no-files-found: error
           retention-days: 14
@@ -87,7 +93,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          files=(Palettify-unsigned.ipa Palettify-SHA256SUMS.txt)
+          files=(Palettify.ipa Palettify-SHA256SUMS.txt)
           exists() { gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; }
           if [[ "$GITHUB_REF_NAME" == v* ]]; then
             # The binary release workflow creates this release, with its notes; wait for it
@@ -99,5 +105,5 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" "${files[@]}" \
               --repo "$GITHUB_REPOSITORY" --prerelease --title "Palettify $GITHUB_REF_NAME" \
-              --notes "Unsigned iOS and iPadOS app for sideloading with Sideloadly or AltStore, which sign it with your own Apple ID. Needs iOS 17 or later. Built from $GITHUB_SHA."
+              --notes "Ad-hoc signed iOS and iPadOS app for sideloading with SideStore, LiveContainer, Sideloadly or AltStore, which replace the signature with their own on install. Needs iOS 17 or later. Built from $GITHUB_SHA."
           fi
